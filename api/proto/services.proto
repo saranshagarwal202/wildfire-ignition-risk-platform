@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package riskplatform;
+
+option go_package = "wildfire-ignition-risk-platform/api/proto/generated";
+
+// The main coordinator service
+service OrchestratorService {
+  rpc CreateRiskAssessmentJob(CreateJobRequest) returns (CreateJobResponse);
+  rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+}
+
+message CreateJobRequest {
+  string aoi_geojson = 1; // GeoJSON string for the area of interest
+}
+
+message CreateJobResponse {
+  string job_id = 1;
+  JobStatus status = 2;
+  string message = 3;
+}
+
+message GetJobStatusRequest {
+  string job_id = 1;
+}
+
+message GetJobStatusResponse {
+  string job_id = 1;
+  JobStatus status = 2;
+  string message = 3;
+  int64 created_at = 4;
+  int64 updated_at = 5;
+}
+
+enum JobStatus {
+  PENDING = 0;
+  GATHERING_DATA = 1;
+  PROCESSING = 2;
+  COMPLETE = 3;
+  FAILED = 4;
+}
+
+// Service to fetch infrastructure data
+service InfrastructureService {
+  rpc GetAssetsInAOI(GetAssetsRequest) returns (GetAssetsResponse);
+}
+
+message GetAssetsRequest {
+  string aoi_geojson = 1;
+}
+
+message Asset {
+  string asset_type = 1;        // "building", "road", "power_line"
+  string asset_geometry_geojson = 2;
+  map<string, string> properties = 3; // Additional OSM properties
+}
+
+message GetAssetsResponse {
+  repeated Asset assets = 1;
+  int32 total_count = 2;
+}
+
+// Service to fetch topography data
+service TopographyService {
+  rpc GetDemForAOI(GetDemRequest) returns (GetDemResponse);
+}
+
+message GetDemRequest {
+  string aoi_geojson = 1;
+}
+
+message GetDemResponse {
+  string local_dem_path = 1; // Path on shared volume where DEM is stored
+  string metadata = 2;       // DEM metadata (resolution, projection, etc.)
+}

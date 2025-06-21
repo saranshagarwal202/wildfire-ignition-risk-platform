@@ -1,0 +1,195 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  # Database
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: wildfire_postgres
+    environment:
+      POSTGRES_DB: wildfire_risk
+      POSTGRES_USER: wildfire_user
+      POSTGRES_PASSWORD: wildfire_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./shared/database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - wildfire_network
+
+  # Kafka & Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: wildfire_zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - wildfire_network
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: wildfire_kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - wildfire_network
+
+  # Spark
+  spark-master:
+    image: bitnami/spark:latest
+    container_name: wildfire_spark_master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ./data:/data
+      - ./services/spark-processor:/app
+    networks:
+      - wildfire_network
+
+  spark-worker:
+    image: bitnami/spark:latest
+    container_name: wildfire_spark_worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - SPARK_WORKER_CORES=2
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    volumes:
+      - ./data:/data
+      - ./services/spark-processor:/app
+    networks:
+      - wildfire_network
+
+  # Metabase for visualization
+  metabase:
+    image: metabase/metabase:latest
+    container_name: wildfire_metabase
+    ports:
+      - "3000:3000"
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: wildfire_risk
+      MB_DB_PORT: 5432
+      MB_DB_USER: wildfire_user
+      MB_DB_PASS: wildfire_pass
+      MB_DB_HOST: postgres
+    depends_on:
+      - postgres
+    networks:
+      - wildfire_network
+
+  # Microservices
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: wildfire_api_gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - ORCHESTRATOR_URL=orchestrator:9000
+    depends_on:
+      - orchestrator
+    networks:
+      - wildfire_network
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    container_name: wildfire_orchestrator
+    ports:
+      - "9000:9000"
+    environment:
+      - DATABASE_URL=postgres://wildfire_user:wildfire_pass@postgres:5432/wildfire_risk?sslmode=disable
+      - KAFKA_BROKERS=kafka:9092
+      - INFRASTRUCTURE_SERVICE_URL=infrastructure:9001
+      - TOPOGRAPHY_SERVICE_URL=topography:9002
+    depends_on:
+      - postgres
+      - kafka
+      - infrastructure
+      - topography
+    volumes:
+      - ./data:/data
+    networks:
+      - wildfire_network
+
+  infrastructure:
+    build:
+      context: .
+      dockerfile: services/infrastructure/Dockerfile
+    container_name: wildfire_infrastructure
+    ports:
+      - "9001:9001"
+    networks:
+      - wildfire_network
+
+  topography:
+    build:
+      context: .
+      dockerfile: services/topography/Dockerfile
+    container_name: wildfire_topography
+    ports:
+      - "9002:9002"
+    volumes:
+      - ./data:/data
+    networks:
+      - wildfire_network
+
+  downloader:
+    build:
+      context: .
+      dockerfile: services/downloader/Dockerfile
+    container_name: wildfire_downloader
+    environment:
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - kafka
+    volumes:
+      - ./data:/data
+    networks:
+      - wildfire_network
+
+  ingestion:
+    build:
+      context: .
+      dockerfile: services/ingestion/Dockerfile
+    container_name: wildfire_ingestion
+    environment:
+      - DATABASE_URL=postgres://wildfire_user:wildfire_pass@postgres:5432/wildfire_risk?sslmode=disable
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - postgres
+      - kafka
+    networks:
+      - wildfire_network
+
+volumes:
+  postgres_data:
+
+networks:
+  wildfire_network:
+    driver: bridge
